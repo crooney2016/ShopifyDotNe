@@ -1,115 +1,61 @@
-using System;
-using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
+using ShopifySharp;
 
-namespace Shopify.Functions
+public static class ListProductMetadata
 {
-    public static class GetProductMetadata
+    [FunctionName("ListProductMetadata")]
+    public static async Task<IActionResult> Run(
+        [HttpTrigger(AuthorizationLevel.Function, "post", Route = null)] HttpRequest req,
+        ILogger log)
     {
-        [FunctionName("GetProductMetadata")]
-        public static async Task<IActionResult> Run(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = null)] HttpRequest req,
-            ILogger log)
+        // Get the site URL and access token from the request body
+        string siteUrl = req.Form["siteUrl"];
+        string accessToken = req.Form["accessToken"];
+
+        // Check if the url and token are null or empty
+        if (string.IsNullOrEmpty(siteUrl) || string.IsNullOrEmpty(accessToken))
         {
-            log.LogInformation("C# HTTP trigger function processed a request.");
-
-            // Get store id from request 
-            string storeID = req.Query["storeID"];
-
-            // Create request for products in store 
-            string query = @"query {
-      shop {
-        products(first: 10) {
-          pageInfo {
-            hasNextPage
-            hasPreviousPage
-            startCursor
-            endCursor
-          }
-          edges {
-            node {
-              id
-              title
-              description
-              metafields {
-                key
-                value
-              }
-            }
-          }
+            return new BadRequestObjectResult("Please provide both siteUrl and accessToken in the request body");
         }
-      }
-    }";
-            var request = WebRequest.CreateHttp("https://" + storeID + ".myshopify.com/admin/api/2020-01/graphql.json");
-            var postData = Encoding.UTF8.GetBytes(query);
 
-            request.Method = "POST";
-            request.ContentType = "application/json";
-            request.ContentLength = postData.Length;
+        // Initialize the Shopify service
+        var shopify = new ShopifyShopService(siteUrl, accessToken);
 
-            using (var stream = request.GetRequestStream())
+        // Get a list of all products
+        var products = await shopify.ListAsync();
+
+        // Create a list to store all the product metadata
+        var productMetadata = new List<Dictionary<string, string>>();
+
+        // Iterate through each product
+        foreach (var product in products)
+        {
+            // Get the product's metafields
+            var metafields = await shopify.MetaFields.ListAsync(product.Id.Value);
+
+            // Filter metafields to only include those with key containing "msrp"
+            metafields = metafields.Where(m => m.Key.ToLower().Contains("msrp")).ToList();
+            
+            // Create a dictionary to store the product's metadata
+            var productMetadataFields = new Dictionary<string, string>();
+
+            // Add the product's metadata to the dictionary
+            foreach (var metafield in metafields)
             {
-                stream.Write(postData, 0, postData.Length);
+                productMetadataFields.Add(metafield.Key, metafield.Value);
             }
 
-            // Declare variables 
-            var response = (HttpWebResponse)request.GetResponse();
-            var responseString = new StreamReader(response.GetResponseStream()).ReadToEnd();
-            dynamic products = JsonConvert.DeserializeObject(responseString);
-            var productMetadata = new List<dynamic>();
-
-            // Loop through all products in store 
-            while (products.data.shop.products.pageInfo.hasNextPage)
-            {
-                productMetadata.AddRange(products.data.shop.products.edges.Select(edge => edge.node));
-
-                // Create request for next page of products 
-                query = @"query {
-          shop {
-            products(first: 10, after: """ + products.data.shop.products.pageInfo.endCursor + @""") {
-              pageInfo {
-                hasNextPage
-                hasPreviousPage
-                startCursor
-                endCursor
-              }
-              edges {
-                node {
-                  id
-                  title
-                  description
-                  metafields {
-                    key
-                    value
-                  }
-                }
-              }
-            }
-          }
-        }";
-                postData = Encoding.UTF8.GetBytes(query);
-
-                request.ContentLength =
-                    request.ContentLength = postData.Length;
-
-                using (var stream = request.GetRequestStream())
-                {
-                    stream.Write(postData, 0, postData.Length);
-                }
-
-                response = (HttpWebResponse)request.GetResponse();
-                responseString = new StreamReader(response.GetResponseStream()).ReadToEnd();
-                products = JsonConvert.DeserializeObject(responseString);
-
-                // Return product metadata in response 
-                return new OkObjectResult(productMetadata);
-            }
+            // Add the product's metadata to the list
+            productMetadata.Add(productMetadataFields);
         }
+
+        // Return the list of product metadata
+        return new OkObjectResult(productMetadata);
     }
 }
