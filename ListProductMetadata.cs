@@ -6,6 +6,7 @@ using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using ShopifySharp;
+using System.Collections.Generic;
 
 public static class ListProductMetadata
 {
